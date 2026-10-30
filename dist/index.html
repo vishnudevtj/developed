@@ -1,0 +1,422 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Developed — Photography</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;1,300&family=Jost:wght@300;400&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #fff;
+    --fg: #111;
+    --muted: #8a8a8a;
+    --gap: clamp(6px, 1vw, 14px);       /* space between photos */
+    --row-h: clamp(140px, 22vw, 300px); /* target row height */
+    --pad: clamp(16px, 3vw, 44px);
+    color-scheme: light;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html { scroll-behavior: smooth; }
+  body {
+    background: var(--bg);
+    color: var(--fg);
+    font-family: "Jost", system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* Header */
+  header {
+    display: flex;
+    justify-content: flex-start;
+    align-items: baseline;
+    padding: var(--pad);
+    padding-bottom: calc(var(--pad) * .6);
+  }
+  .name {
+    font-family: "Cormorant Garamond", serif;
+    font-weight: 300;
+    font-size: clamp(1.6rem, 3.2vw, 2.6rem);
+    letter-spacing: .02em;
+    color: var(--fg);
+    text-decoration: none;
+  }
+
+  /* Justified grid: aspect ratios preserved, rows fill full width */
+  main { padding: 0 var(--pad) var(--pad); }
+  .grid {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--gap);
+    list-style: none;
+  }
+  .grid::after { content: ""; flex-grow: 1e4; } /* keeps last row from stretching */
+  .grid li {
+    --r: 1.5; /* aspect ratio, set by JS */
+    flex: calc(var(--r) * 100) 1 calc(var(--r) * var(--row-h));
+    min-width: 0;
+    aspect-ratio: var(--r);
+    background: #f4f4f4;
+    overflow: hidden;
+    cursor: zoom-in;
+    contain: layout paint;
+    outline-offset: 3px;
+  }
+  .grid li:focus-visible { outline: 2px solid var(--fg); }
+  .grid img {
+    display: block;
+    width: 100%;
+    height: 100%;
+    object-fit: cover; /* ratio already matches, so no real cropping */
+    opacity: 0;
+    transition: opacity .6s ease;
+  }
+  .grid img.loaded { opacity: 1; }
+  @media (hover: hover) {
+    .grid li:hover img { opacity: .88; }
+  }
+  @media (max-width: 560px) {
+    :root { --row-h: 120px; }
+    /* portraits sit side by side, wide shots take the full row */
+    .grid li[data-wide] { flex-basis: 100%; }
+  }
+
+  footer {
+    padding: var(--pad);
+    text-align: center;
+    color: var(--muted);
+    font-size: .75rem;
+    letter-spacing: .12em;
+    text-transform: uppercase;
+  }
+  .empty { color: var(--muted); padding: 4rem 0; text-align: center; font-weight: 300; }
+
+  /* Lightbox (native dialog) */
+  dialog {
+    border: 0;
+    padding: 0;
+    width: 100vw; height: 100vh;
+    max-width: none; max-height: none;
+    background: rgba(255,255,255,.97);
+    overflow: hidden;
+  }
+  dialog::backdrop { background: transparent; }
+  dialog[open] { display: grid; place-items: center; animation: fade .25s ease; }
+  @keyframes fade { from { opacity: 0 } }
+  dialog img {
+    max-width: 94vw; max-height: 92vh;
+    object-fit: contain;
+  }
+  dialog button {
+    position: absolute;
+    background: none; border: 0;
+    font: 300 2rem/1 "Jost", sans-serif;
+    color: var(--fg);
+    cursor: pointer;
+    padding: .6rem 1rem;
+    opacity: .5; transition: opacity .2s;
+  }
+  dialog button:hover { opacity: 1; }
+  .close { top: 8px; right: 12px; }
+  .prev  { left: 4px;  top: 50%; translate: 0 -50%; }
+  .next  { right: 4px; top: 50%; translate: 0 -50%; }
+  html { scrollbar-gutter: stable; }
+  body:has(dialog[open]) { overflow: hidden; }
+  dialog button:focus-visible { outline: 2px solid var(--fg); }
+  dialog img { touch-action: pan-y; user-select: none; -webkit-user-drag: none; }
+  .count {
+    position: absolute; bottom: 14px; left: 0; right: 0;
+    text-align: center; font-size: .75rem; letter-spacing: .14em; color: var(--muted);
+  }
+  @media (prefers-reduced-motion: reduce) {
+    html { scroll-behavior: auto; }
+    .grid img { transition: none; }
+    dialog[open] { animation: none; }
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <a class="name" href="#">Developed</a>
+</header>
+
+<main>
+  <ul class="grid" id="grid"></ul>
+  <div id="sentinel"></div>
+</main>
+
+<footer>© <span id="year"></span> Developed</footer>
+
+<dialog id="lightbox" aria-label="Photo viewer">
+  <button class="close" aria-label="Close">×</button>
+  <button class="prev" aria-label="Previous">‹</button>
+  <img alt="">
+  <button class="next" aria-label="Next">›</button>
+  <div class="count" aria-live="polite"></div>
+</dialog>
+
+<script type="module">
+/* ------------------------------------------------------------------
+   1. IMAGE LIST
+   Fill IMAGES with filenames, or leave empty to read the directory
+   listing of img/ (python http.server, nginx autoindex, Apache...).
+------------------------------------------------------------------- */
+const IMAGES = [
+  // "01.jpg",
+];
+const FOLDER = "img/";       // full-size, used in the zoomed view
+const THUMBS = "thumbs/";    // small, used in the grid (only if images.json says so)
+const EXT = /\.(jpe?g|png|webp|avif|gif)$/i;
+const BATCH = 12;       // photos added to the page per step
+const MARGIN = 800;     // px before the bottom at which we add more / start loading
+
+async function discover() {
+  try {                                                    // 1. manifest from build.py (best)
+    const r = await fetch("images.json", { cache: "no-cache" });
+    if (r.ok) return (await r.json()).map(e => typeof e === "string" ? { f: e } : e);
+  } catch {}
+  if (IMAGES.length) return IMAGES.map(f => ({ f }));      // 2. hand-written list
+  try {                                                    // 3. directory listing (local dev)
+    const res = await fetch(FOLDER);
+    const doc = new DOMParser().parseFromString(await res.text(), "text/html");
+    return [...doc.querySelectorAll("a[href]")]
+      .map(a => decodeURIComponent(a.getAttribute("href").split("/").pop()))
+      .filter(f => EXT.test(f))
+      .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }))
+      .map(f => ({ f }));
+  } catch { return []; }
+}
+
+/* ------------------------------------------------------------------
+   2. SIZE PROBE
+   To lay out rows we need each photo's aspect ratio BEFORE downloading
+   it. We stream only the first bytes of the file, read the JPEG/PNG
+   header (incl. EXIF orientation), then abort the request.
+------------------------------------------------------------------- */
+const r16 = (b, i, le) => le ? b[i] | b[i + 1] << 8 : b[i] << 8 | b[i + 1];
+const r32 = (b, i, le) => le
+  ? (b[i] | b[i + 1] << 8 | b[i + 2] << 16 | b[i + 3] << 24) >>> 0
+  : (b[i] << 24 | b[i + 1] << 16 | b[i + 2] << 8 | b[i + 3]) >>> 0;
+
+function exifOrientation(b, s, e) {
+  if (b[s] !== 0x45 || b[s + 1] !== 0x78) return 1;       // "Ex"
+  const t = s + 6, le = b[t] === 0x49;
+  const ifd = t + r32(b, t + 4, le);
+  if (ifd + 2 > e) return 1;
+  for (let k = 0, n = r16(b, ifd, le); k < n; k++) {
+    const p = ifd + 2 + k * 12;
+    if (p + 12 > e) break;
+    if (r16(b, p, le) === 0x0112) return r16(b, p + 8, le);
+  }
+  return 1;
+}
+
+/* -> {w,h,o} when known, null when more bytes are needed, false when unsupported */
+function sniff(b) {
+  if (b.length < 4) return null;
+  if (b[0] === 0x89 && b[1] === 0x50)                      // PNG
+    return b.length >= 24 ? { w: r32(b, 16), h: r32(b, 20), o: 1 } : null;
+  if (b[0] !== 0xFF || b[1] !== 0xD8) return false;        // not JPEG
+  let i = 2, o = 1;
+  while (i + 4 <= b.length) {
+    if (b[i] !== 0xFF) { i++; continue; }
+    const m = b[i + 1];
+    if (m === 0xFF) { i++; continue; }
+    if (m === 0xD8 || m === 0x01 || (m >= 0xD0 && m <= 0xD7)) { i += 2; continue; }
+    const len = b[i + 2] << 8 | b[i + 3];
+    if (m >= 0xC0 && m <= 0xCF && m !== 0xC4 && m !== 0xC8 && m !== 0xCC) {
+      if (i + 9 > b.length) return null;
+      return { h: b[i + 5] << 8 | b[i + 6], w: b[i + 7] << 8 | b[i + 8], o };
+    }
+    if (m === 0xE1) {
+      if (i + 2 + len > b.length) return null;
+      o = exifOrientation(b, i + 4, i + 2 + len);
+    }
+    i += 2 + len;
+  }
+  return null;
+}
+
+async function probe(url) {
+  const ctrl = new AbortController();
+  try {
+    const rd = (await fetch(url, { signal: ctrl.signal })).body.getReader();
+    let buf = new Uint8Array(0);
+    for (;;) {
+      const { done, value } = await rd.read();
+      if (done) return null;
+      const n = new Uint8Array(buf.length + value.length);
+      n.set(buf); n.set(value, buf.length); buf = n;
+      const info = sniff(buf);
+      if (info !== null) return info || null;
+    }
+  } finally { ctrl.abort(); }
+}
+
+/* ------------------------------------------------------------------
+   3. ONE DOWNLOAD PER IMAGE
+   Each photo is fetched once as a Blob; the grid and the lightbox both
+   use that same object URL, so zooming never triggers a re-download.
+------------------------------------------------------------------- */
+const load = (it, kind) => {
+  if (kind === "thumb" && it.thumbUrl === it.url) kind = "full";   // no thumb => share one blob
+  return it[kind + "Blob"] ??= fetch(kind === "thumb" ? it.thumbUrl : it.url)
+    .then(r => r.blob())
+    .then(b => URL.createObjectURL(b));
+};
+const ensure = it => load(it, "full");
+const ensureThumb = it => load(it, "thumb");
+
+async function ratioOf(it) {
+  try {
+    const i = await probe(it.url);
+    if (i && i.w && i.h) return i.o >= 5 ? i.h / i.w : i.w / i.h;
+  } catch {}
+  try {                                   // fallback (webp, avif...): full load
+    const im = new Image();
+    im.src = await ensure(it);
+    await im.decode();
+    return im.naturalWidth / im.naturalHeight;
+  } catch { return 1.5; }
+}
+
+/* ------------------------------------------------------------------
+   4. PROGRESSIVE CATALOG
+   - add photos in batches only while the bottom is near the viewport
+   - download a photo only once its tile approaches the viewport
+------------------------------------------------------------------- */
+const grid = document.getElementById("grid");
+const sentinel = document.getElementById("sentinel");
+const files = await discover();
+const items = [];
+let next = 0, busy = false;
+
+if (!files.length) {
+  grid.outerHTML = '<p class="empty">Add your photos to <code>img/</code> and list them in the IMAGES array.</p>';
+}
+
+const tileObserver = new IntersectionObserver(entries => {
+  for (const e of entries) {
+    if (!e.isIntersecting) continue;
+    tileObserver.unobserve(e.target);
+    const it = e.target._item;
+    ensureThumb(it)
+      .then(u => { it.thumbSrc = u; it.img.src = u; return it.img.decode(); })
+      .catch(() => {})
+      .finally(() => it.img.classList.add("loaded"));
+  }
+}, { rootMargin: `${MARGIN / 2}px` });
+
+let chain = Promise.resolve();                 // keep batches strictly in order
+const addBatch = () => chain = chain.then(addBatchNow);
+async function addBatchNow() {
+  const slice = files.slice(next, next + BATCH);
+  next += slice.length;
+  const batch = await Promise.all(slice.map(async e => {
+    const it = { name: e.f, url: FOLDER + encodeURIComponent(e.f) };
+    it.thumbUrl = e.t ? THUMBS + encodeURIComponent(e.f) : it.url;
+    it.ratio = e.w && e.h ? e.w / e.h : await ratioOf(it);   // manifest => no probing
+    return it;
+  }));
+  const frag = document.createDocumentFragment();
+  for (const it of batch) {
+    const li = document.createElement("li");
+    li.style.setProperty("--r", it.ratio.toFixed(4));
+    if (it.ratio > 1.2) li.dataset.wide = "";
+    it.img = new Image();
+    it.img.alt = "";
+    it.img.decoding = "async";
+    li.append(it.img);
+    li._item = it;
+    li.tabIndex = 0;
+    li.setAttribute("role", "button");
+    li.setAttribute("aria-label", `Open photo ${items.length + 1}`);
+    li.addEventListener("click", () => openBox(items.indexOf(it)));
+    li.addEventListener("keydown", e => {
+      if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openBox(items.indexOf(it)); }
+    });
+    items.push(it);
+    frag.append(li);
+    tileObserver.observe(li);
+  }
+  grid.append(frag);
+}
+
+async function fill() {
+  if (busy) return;
+  busy = true;
+  while (next < files.length &&
+         sentinel.getBoundingClientRect().top < innerHeight + MARGIN) {
+    await addBatch();
+  }
+  busy = false;
+}
+new IntersectionObserver(fill, { rootMargin: `${MARGIN}px` }).observe(sentinel);
+addEventListener("resize", fill);
+fill();
+
+/* ------------------------------------------------------------------
+   5. LIGHTBOX — keyboard + swipe, reuses already-downloaded blobs
+------------------------------------------------------------------- */
+const box = document.getElementById("lightbox");
+const big = box.querySelector("img");
+const count = box.querySelector(".count");
+let idx = 0, token = 0;
+
+async function show(i) {
+  idx = (i + items.length) % items.length;
+  const t = ++token, it = items[idx];
+  count.textContent = `${idx + 1} / ${files.length}`;
+  if (it.thumbSrc) { big.src = it.thumbSrc; big.style.visibility = "visible"; }  // instant preview
+  else big.style.visibility = "hidden";
+  const u = await ensure(it);                       // full-size, downloaded once
+  if (t !== token) return;
+  if (u !== it.thumbSrc) {                          // decode off-screen => no flicker on swap
+    const pre = new Image(); pre.src = u;
+    await pre.decode().catch(() => {});
+    if (t !== token) return;
+  }
+  big.src = u;
+  big.style.visibility = "visible";
+  if (items.length > 1) {                           // warm up neighbours
+    ensure(items[(idx + 1) % items.length]);
+    ensure(items[(idx - 1 + items.length) % items.length]);
+  }
+}
+async function go(d) {
+  const i = idx + d;
+  if (i >= items.length && next < files.length) await addBatch();  // reach not-yet-added photos
+  show(i);
+}
+function openBox(i) { show(i); box.showModal(); }
+
+box.querySelector(".close").onclick = () => box.close();
+box.querySelector(".prev").onclick = () => go(-1);
+box.querySelector(".next").onclick = () => go(1);
+box.addEventListener("click", e => { if (e.target === box) box.close(); });
+box.addEventListener("close", () => items[idx]?.img.parentElement.focus());  // back to the tile
+
+addEventListener("keydown", e => {
+  if (!box.open || e.altKey || e.ctrlKey || e.metaKey) return;
+  const k = e.key;
+  if (k === "ArrowRight" || k === "ArrowDown" || k === "PageDown") go(1);
+  else if (k === "ArrowLeft" || k === "ArrowUp" || k === "PageUp") go(-1);
+  else if (k === "Home") show(0);
+  else if (k === "End") { next < files.length ? fill() : null; show(items.length - 1); }
+  else return;
+  e.preventDefault();
+});
+
+let x0 = null;                                  // swipe on touch screens
+box.addEventListener("pointerdown", e => { x0 = e.clientX; });
+box.addEventListener("pointerup", e => {
+  if (x0 !== null && Math.abs(e.clientX - x0) > 50) go(e.clientX < x0 ? 1 : -1);
+  x0 = null;
+});
+
+document.getElementById("year").textContent = new Date().getFullYear();
+</script>
+</body>
+</html>
